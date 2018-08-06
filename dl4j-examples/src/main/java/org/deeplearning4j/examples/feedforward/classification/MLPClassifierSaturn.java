@@ -67,7 +67,7 @@ public class MLPClassifierSaturn {
 		// log.info("Build model....");
 		final NeuralNetConfiguration.Builder neuralnet_builder = new NeuralNetConfiguration.Builder();
 
-		// configure neural network params
+		// configure neural network params...
 		neuralnet_builder.seed(seed);
 		neuralnet_builder.iterations(1);
 		neuralnet_builder.optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT);
