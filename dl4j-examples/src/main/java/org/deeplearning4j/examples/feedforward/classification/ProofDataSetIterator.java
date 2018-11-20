@@ -14,29 +14,31 @@ import org.nd4j.linalg.io.ClassPathResource;
 
 public class ProofDataSetIterator {
 
-    public static void main(final String[] args) throws IOException, InterruptedException {
+	public static void main(final String[] args) throws IOException, InterruptedException {
 
-	final String filenameTrain = new ClassPathResource("/classification/saturn_data_train.csv").getFile().getPath();
-	final int batchSize = 100;
+		final String filenameTrain = new ClassPathResource("/classification/saturn_data_train.csv").getFile().getPath();
+		final int batchSize = 100;
 
-	final RecordReader rr = new CSVRecordReader();
-	final FileSplit split = new FileSplit(new File(filenameTrain));
-	rr.initialize(split);
+		final RecordReader rr = new CSVRecordReader();
+		final FileSplit split = new FileSplit(new File(filenameTrain));
+		rr.initialize(split);
 
-	final DataSetIterator trainIter = new RecordReaderDataSetIterator(rr, batchSize, 0, 2);
+		final DataSetIterator trainIter = new RecordReaderDataSetIterator(rr, batchSize, 0, 2);
 
-	while (trainIter.hasNext()) {
+		while (trainIter.hasNext()) {
 
-	    final DataSet ds = trainIter.next();
+			// proof
 
-	    final INDArray ftr = ds.getFeatures();
+			final DataSet ds = trainIter.next();
 
-	    System.out.println(ftr);
+			final INDArray ftr = ds.getFeatures();
 
-	    final int check = 0;
+			System.out.println(ftr);
+
+			final int check = 0;
+
+		}
 
 	}
-
-    }
 
 }
