@@ -6,6 +6,8 @@ import java.util.Random;
 import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
+import org.deeplearning4j.api.storage.StatsStorageRouter;
+import org.deeplearning4j.api.storage.impl.RemoteUIStatsStorageRouter;
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
@@ -18,6 +20,8 @@ import org.deeplearning4j.nn.conf.layers.OutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.ui.api.UIServer;
+import org.deeplearning4j.ui.stats.StatsListener;
 import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
@@ -40,11 +44,11 @@ public class MLPClassifierSaturn {
 
 	public static void main(final String[] args) throws Exception {
 		Nd4j.ENFORCE_NUMERICAL_STABILITY = true;
-		final int batchSize = 50;
+		final int batchSize = 5;
 		final int seed = 123;
 		final double learningRate = 0.005;
 		// Number of epochs (full passes of the data)
-		final int nEpochs = 30;
+		final int nEpochs = 100;
 
 		final int numInputs = 2;
 		final int numOutputs = 2;
@@ -100,6 +104,15 @@ public class MLPClassifierSaturn {
 		final MultiLayerNetwork model = new MultiLayerNetwork(conf);
 		model.init();
 		model.setListeners(new ScoreIterationListener(10)); // Print score every 10 parameter updates
+
+		// ** UI SERVER **//
+		final UIServer uiServer = UIServer.getInstance();
+		uiServer.enableRemoteListener(); // Create the remote stats storage router - this sends the results to the UI via
+											// HTTP, assuming the UI is at http://localhost:9000
+		final StatsStorageRouter remoteUIRouter = new RemoteUIStatsStorageRouter("http://localhost:9000");
+		model.setListeners(new StatsListener(remoteUIRouter));
+
+		// ** UI SERVER **//
 
 		for (int n = 0; n < nEpochs; n++) {
 			model.fit(trainIter);
