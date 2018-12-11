@@ -6,8 +6,7 @@ import java.util.Random;
 import org.datavec.api.records.reader.RecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVRecordReader;
 import org.datavec.api.split.FileSplit;
-import org.deeplearning4j.api.storage.StatsStorageRouter;
-import org.deeplearning4j.api.storage.impl.RemoteUIStatsStorageRouter;
+import org.deeplearning4j.api.storage.StatsStorage;
 import org.deeplearning4j.datasets.datavec.RecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
@@ -22,6 +21,7 @@ import org.deeplearning4j.nn.weights.WeightInit;
 import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
 import org.deeplearning4j.ui.api.UIServer;
 import org.deeplearning4j.ui.stats.StatsListener;
+import org.deeplearning4j.ui.storage.InMemoryStatsStorage;
 import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.api.ndarray.INDArray;
 import org.nd4j.linalg.dataset.DataSet;
@@ -106,11 +106,21 @@ public class MLPClassifierSaturn {
 		model.setListeners(new ScoreIterationListener(10)); // Print score every 10 parameter updates
 
 		// ** UI SERVER **//
+
+		// Initialize the user interface backend
 		final UIServer uiServer = UIServer.getInstance();
-		uiServer.enableRemoteListener(); // Create the remote stats storage router - this sends the results to the UI via
-											// HTTP, assuming the UI is at http://localhost:9000
-		final StatsStorageRouter remoteUIRouter = new RemoteUIStatsStorageRouter("http://localhost:9000");
-		model.setListeners(new StatsListener(remoteUIRouter));
+
+		// Configure where the network information (gradients, activations, score vs.
+		// time etc) is to be stored
+		// Then add the StatsListener to collect this information from the network, as
+		// it trains
+		final StatsStorage statsStorage = new InMemoryStatsStorage(); // Alternative: new FileStatsStorage(File) - see UIStorageExample
+		final int listenerFrequency = 1;
+		model.setListeners(new StatsListener(statsStorage, listenerFrequency));
+
+		// Attach the StatsStorage instance to the UI: this allows the contents of the
+		// StatsStorage to be visualized
+		uiServer.attach(statsStorage);
 
 		// ** UI SERVER **//
 
