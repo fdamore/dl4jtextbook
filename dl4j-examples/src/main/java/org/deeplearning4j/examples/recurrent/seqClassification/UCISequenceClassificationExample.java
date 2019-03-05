@@ -13,6 +13,7 @@ import org.datavec.api.berkeley.Pair;
 import org.datavec.api.records.reader.SequenceRecordReader;
 import org.datavec.api.records.reader.impl.csv.CSVSequenceRecordReader;
 import org.datavec.api.split.NumberedFileInputSplit;
+import org.deeplearning4j.api.storage.StatsStorage;
 import org.deeplearning4j.datasets.datavec.SequenceRecordReaderDataSetIterator;
 import org.deeplearning4j.eval.Evaluation;
 import org.deeplearning4j.nn.api.OptimizationAlgorithm;
@@ -24,7 +25,9 @@ import org.deeplearning4j.nn.conf.layers.GravesLSTM;
 import org.deeplearning4j.nn.conf.layers.RnnOutputLayer;
 import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
 import org.deeplearning4j.nn.weights.WeightInit;
-import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.ui.api.UIServer;
+import org.deeplearning4j.ui.stats.StatsListener;
+import org.deeplearning4j.ui.storage.InMemoryStatsStorage;
 import org.nd4j.linalg.activations.Activation;
 import org.nd4j.linalg.dataset.api.iterator.DataSetIterator;
 import org.nd4j.linalg.dataset.api.preprocessor.DataNormalization;
@@ -79,151 +82,165 @@ import org.slf4j.LoggerFactory;
  * @author Alex Black
  */
 public class UCISequenceClassificationExample {
-    // 'baseDir': Base directory for the data. Change this if you want to save the
-    // data somewhere else
-    private static File baseDir = new File("/home/francesco/work/uci/");
+	// 'baseDir': Base directory for the data. Change this if you want to save the
+	// data somewhere else
+	private static File			baseDir				= new File("/home/francesco/work/uci/");
 
-    private static File baseTestDir = new File(UCISequenceClassificationExample.baseDir, "test");
-    private static File baseTrainDir = new File(UCISequenceClassificationExample.baseDir, "train");
-    private static File featuresDirTest = new File(UCISequenceClassificationExample.baseTestDir, "features");
-    private static File featuresDirTrain = new File(UCISequenceClassificationExample.baseTrainDir, "features");
-    private static File labelsDirTest = new File(UCISequenceClassificationExample.baseTestDir, "labels");
-    private static File labelsDirTrain = new File(UCISequenceClassificationExample.baseTrainDir, "labels");
-    private static final Logger log = LoggerFactory.getLogger(UCISequenceClassificationExample.class);
+	private static File			baseTestDir			= new File(UCISequenceClassificationExample.baseDir, "test");
+	private static File			baseTrainDir		= new File(UCISequenceClassificationExample.baseDir, "train");
+	private static File			featuresDirTest		= new File(UCISequenceClassificationExample.baseTestDir, "features");
+	private static File			featuresDirTrain	= new File(UCISequenceClassificationExample.baseTrainDir, "features");
+	private static File			labelsDirTest		= new File(UCISequenceClassificationExample.baseTestDir, "labels");
+	private static File			labelsDirTrain		= new File(UCISequenceClassificationExample.baseTrainDir, "labels");
+	private static final Logger	log					= LoggerFactory.getLogger(UCISequenceClassificationExample.class);
 
-    // This method downloads the data, and converts the "one time series per line"
-    // format into a suitable
-    // CSV sequence format that DataVec (CsvSequenceRecordReader) and DL4J can read.
-    private static void downloadUCIData() throws Exception {
-	if (UCISequenceClassificationExample.baseDir.exists()) {
-	    return; // Data already exists, don't download it again
+	// This method downloads the data, and converts the "one time series per line"
+	// format into a suitable
+	// CSV sequence format that DataVec (CsvSequenceRecordReader) and DL4J can read.
+	private static void downloadUCIData() throws Exception {
+		if (UCISequenceClassificationExample.baseDir.exists()) {
+			return; // Data already exists, don't download it again
+		}
+
+		final String url = "https://archive.ics.uci.edu/ml/machine-learning-databases/synthetic_control-mld/synthetic_control.data";
+		final String data = IOUtils.toString(new URL(url));
+
+		final String[] lines = data.split("\n");
+
+		// Create directories
+		UCISequenceClassificationExample.baseDir.mkdir();
+		UCISequenceClassificationExample.baseTrainDir.mkdir();
+		UCISequenceClassificationExample.featuresDirTrain.mkdir();
+		UCISequenceClassificationExample.labelsDirTrain.mkdir();
+		UCISequenceClassificationExample.baseTestDir.mkdir();
+		UCISequenceClassificationExample.featuresDirTest.mkdir();
+		UCISequenceClassificationExample.labelsDirTest.mkdir();
+
+		int lineCount = 0;
+		final List<Pair<String, Integer>> contentAndLabels = new ArrayList<>();
+		for (final String line : lines) {
+			final String transposed = line.replaceAll(" +", "\n");
+
+			// Labels: first 100 examples (lines) are label 0, second 100 examples are label
+			// 1, and so on
+			contentAndLabels.add(new Pair<>(transposed, lineCount++ / 100));
+		}
+
+		// Randomize and do a train/test split:
+		Collections.shuffle(contentAndLabels, new Random(12345));
+
+		final int nTrain = 450; // 75% train, 25% test
+		int trainCount = 0;
+		int testCount = 0;
+		for (final Pair<String, Integer> p : contentAndLabels) {
+			// Write output in a format we can read, in the appropriate locations
+			File outPathFeatures;
+			File outPathLabels;
+			if (trainCount < nTrain) {
+				outPathFeatures = new File(UCISequenceClassificationExample.featuresDirTrain, trainCount + ".csv");
+				outPathLabels = new File(UCISequenceClassificationExample.labelsDirTrain, trainCount + ".csv");
+				trainCount++;
+			} else {
+				outPathFeatures = new File(UCISequenceClassificationExample.featuresDirTest, testCount + ".csv");
+				outPathLabels = new File(UCISequenceClassificationExample.labelsDirTest, testCount + ".csv");
+				testCount++;
+			}
+
+			FileUtils.writeStringToFile(outPathFeatures, p.getFirst());
+			FileUtils.writeStringToFile(outPathLabels, p.getSecond().toString());
+		}
 	}
 
-	final String url = "https://archive.ics.uci.edu/ml/machine-learning-databases/synthetic_control-mld/synthetic_control.data";
-	final String data = IOUtils.toString(new URL(url));
+	public static void main(final String[] args) throws Exception {
+		downloadUCIData();
 
-	final String[] lines = data.split("\n");
+		// ----- Load the training data -----
+		// Note that we have 450 training files for features: train/features/0.csv
+		// through train/features/449.csv
+		final SequenceRecordReader trainFeatures = new CSVSequenceRecordReader();
+		trainFeatures.initialize(new NumberedFileInputSplit(UCISequenceClassificationExample.featuresDirTrain.getAbsolutePath() + "/%d.csv", 0, 449));
+		final SequenceRecordReader trainLabels = new CSVSequenceRecordReader();
+		trainLabels.initialize(new NumberedFileInputSplit(UCISequenceClassificationExample.labelsDirTrain.getAbsolutePath() + "/%d.csv", 0, 449));
 
-	// Create directories
-	UCISequenceClassificationExample.baseDir.mkdir();
-	UCISequenceClassificationExample.baseTrainDir.mkdir();
-	UCISequenceClassificationExample.featuresDirTrain.mkdir();
-	UCISequenceClassificationExample.labelsDirTrain.mkdir();
-	UCISequenceClassificationExample.baseTestDir.mkdir();
-	UCISequenceClassificationExample.featuresDirTest.mkdir();
-	UCISequenceClassificationExample.labelsDirTest.mkdir();
+		final int miniBatchSize = 10;
+		final int numLabelClasses = 6;
+		final DataSetIterator trainData = new SequenceRecordReaderDataSetIterator(trainFeatures, trainLabels, miniBatchSize, numLabelClasses, false,
+								SequenceRecordReaderDataSetIterator.AlignmentMode.ALIGN_END);
 
-	int lineCount = 0;
-	final List<Pair<String, Integer>> contentAndLabels = new ArrayList<>();
-	for (final String line : lines) {
-	    final String transposed = line.replaceAll(" +", "\n");
+		// Normalize the training data
+		final DataNormalization normalizer = new NormalizerStandardize();
+		normalizer.fit(trainData); // Collect training data statistics
+		trainData.reset();
 
-	    // Labels: first 100 examples (lines) are label 0, second 100 examples are label
-	    // 1, and so on
-	    contentAndLabels.add(new Pair<>(transposed, lineCount++ / 100));
+		// Use previously collected statistics to normalize on-the-fly. Each DataSet
+		// returned by 'trainData' iterator will be normalized
+		trainData.setPreProcessor(normalizer);
+
+		// ----- Load the test data -----
+		// Same process as for the training data.
+		final SequenceRecordReader testFeatures = new CSVSequenceRecordReader();
+		testFeatures.initialize(new NumberedFileInputSplit(UCISequenceClassificationExample.featuresDirTest.getAbsolutePath() + "/%d.csv", 0, 149));
+		final SequenceRecordReader testLabels = new CSVSequenceRecordReader();
+		testLabels.initialize(new NumberedFileInputSplit(UCISequenceClassificationExample.labelsDirTest.getAbsolutePath() + "/%d.csv", 0, 149));
+
+		final DataSetIterator testData = new SequenceRecordReaderDataSetIterator(testFeatures, testLabels, miniBatchSize, numLabelClasses, false,
+								SequenceRecordReaderDataSetIterator.AlignmentMode.ALIGN_END);
+
+		testData.setPreProcessor(normalizer); // Note that we are using the exact same normalization process as the
+		// training data
+
+		// ----- Configure the network -----
+		final MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder().seed(123) // Random number generator
+								// seed for improved
+								// repeatability. Optional.
+								.optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT).iterations(1).weightInit(WeightInit.XAVIER)
+								.updater(Updater.NESTEROVS).momentum(0.9).learningRate(0.005)
+								.gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue) // Not always required, but
+								// helps with this data set
+								.gradientNormalizationThreshold(0.5).list()
+								.layer(0, new GravesLSTM.Builder().activation(Activation.TANH).nIn(1).nOut(10).build()).layer(1,
+														new RnnOutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation(Activation.SOFTMAX)
+																				.nIn(10).nOut(numLabelClasses).build())
+								.pretrain(false).backprop(true).build();
+
+		final MultiLayerNetwork net = new MultiLayerNetwork(conf);
+		net.init();
+
+		// net.setListeners(new ScoreIterationListener(20)); // Print the score (loss
+		// function value) every 20 iterations
+
+		// Initialize the user interface backed
+		final UIServer uiServer = UIServer.getInstance();
+
+		// Configure where the network information (gradients, score vs. time etc) is to
+		// be stored. Here: store in memory.
+		final StatsStorage statsStorage = new InMemoryStatsStorage(); // Alternative: new FileStatsStorage(File), for saving and loading later
+
+		// Attach the StatsStorage instance to the UI: this allows the contents of the
+		// StatsStorage to be visualized
+		uiServer.attach(statsStorage);
+
+		// Then add the StatsListener to collect this information from the network, as
+		// it trains
+		net.setListeners(new StatsListener(statsStorage));
+
+		// net.addListeners(new ScoreIterationListener(20)); // Print the score
+
+		// ----- Train the network, evaluating the test set performance at each epoch
+		// -----
+		final int nEpochs = 40;
+		final String str = "Test set evaluation at epoch %d: Accuracy = %.2f, F1 = %.2f";
+		for (int i = 0; i < nEpochs; i++) {
+			net.fit(trainData);
+
+			// Evaluate on the test set:
+			final Evaluation evaluation = net.evaluate(testData);
+			UCISequenceClassificationExample.log.info(String.format(str, i, evaluation.accuracy(), evaluation.f1()));
+
+			testData.reset();
+			trainData.reset();
+		}
+
+		UCISequenceClassificationExample.log.info("----- Example Complete -----");
 	}
-
-	// Randomize and do a train/test split:
-	Collections.shuffle(contentAndLabels, new Random(12345));
-
-	final int nTrain = 450; // 75% train, 25% test
-	int trainCount = 0;
-	int testCount = 0;
-	for (final Pair<String, Integer> p : contentAndLabels) {
-	    // Write output in a format we can read, in the appropriate locations
-	    File outPathFeatures;
-	    File outPathLabels;
-	    if (trainCount < nTrain) {
-		outPathFeatures = new File(UCISequenceClassificationExample.featuresDirTrain, trainCount + ".csv");
-		outPathLabels = new File(UCISequenceClassificationExample.labelsDirTrain, trainCount + ".csv");
-		trainCount++;
-	    } else {
-		outPathFeatures = new File(UCISequenceClassificationExample.featuresDirTest, testCount + ".csv");
-		outPathLabels = new File(UCISequenceClassificationExample.labelsDirTest, testCount + ".csv");
-		testCount++;
-	    }
-
-	    FileUtils.writeStringToFile(outPathFeatures, p.getFirst());
-	    FileUtils.writeStringToFile(outPathLabels, p.getSecond().toString());
-	}
-    }
-
-    public static void main(final String[] args) throws Exception {
-	downloadUCIData();
-
-	// ----- Load the training data -----
-	// Note that we have 450 training files for features: train/features/0.csv
-	// through train/features/449.csv
-	final SequenceRecordReader trainFeatures = new CSVSequenceRecordReader();
-	trainFeatures.initialize(new NumberedFileInputSplit(
-		UCISequenceClassificationExample.featuresDirTrain.getAbsolutePath() + "/%d.csv", 0, 449));
-	final SequenceRecordReader trainLabels = new CSVSequenceRecordReader();
-	trainLabels.initialize(new NumberedFileInputSplit(
-		UCISequenceClassificationExample.labelsDirTrain.getAbsolutePath() + "/%d.csv", 0, 449));
-
-	final int miniBatchSize = 10;
-	final int numLabelClasses = 6;
-	final DataSetIterator trainData = new SequenceRecordReaderDataSetIterator(trainFeatures, trainLabels,
-		miniBatchSize, numLabelClasses, false, SequenceRecordReaderDataSetIterator.AlignmentMode.ALIGN_END);
-
-	// Normalize the training data
-	final DataNormalization normalizer = new NormalizerStandardize();
-	normalizer.fit(trainData); // Collect training data statistics
-	trainData.reset();
-
-	// Use previously collected statistics to normalize on-the-fly. Each DataSet
-	// returned by 'trainData' iterator will be normalized
-	trainData.setPreProcessor(normalizer);
-
-	// ----- Load the test data -----
-	// Same process as for the training data.
-	final SequenceRecordReader testFeatures = new CSVSequenceRecordReader();
-	testFeatures.initialize(new NumberedFileInputSplit(
-		UCISequenceClassificationExample.featuresDirTest.getAbsolutePath() + "/%d.csv", 0, 149));
-	final SequenceRecordReader testLabels = new CSVSequenceRecordReader();
-	testLabels.initialize(new NumberedFileInputSplit(
-		UCISequenceClassificationExample.labelsDirTest.getAbsolutePath() + "/%d.csv", 0, 149));
-
-	final DataSetIterator testData = new SequenceRecordReaderDataSetIterator(testFeatures, testLabels,
-		miniBatchSize, numLabelClasses, false, SequenceRecordReaderDataSetIterator.AlignmentMode.ALIGN_END);
-
-	testData.setPreProcessor(normalizer); // Note that we are using the exact same normalization process as the
-					      // training data
-
-	// ----- Configure the network -----
-	final MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder().seed(123) // Random number generator
-											    // seed for improved
-											    // repeatability. Optional.
-		.optimizationAlgo(OptimizationAlgorithm.STOCHASTIC_GRADIENT_DESCENT).iterations(1)
-		.weightInit(WeightInit.XAVIER).updater(Updater.NESTEROVS).momentum(0.9).learningRate(0.005)
-		.gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue) // Not always required, but
-											   // helps with this data set
-		.gradientNormalizationThreshold(0.5).list()
-		.layer(0, new GravesLSTM.Builder().activation(Activation.TANH).nIn(1).nOut(10).build())
-		.layer(1, new RnnOutputLayer.Builder(LossFunctions.LossFunction.MCXENT).activation(Activation.SOFTMAX)
-			.nIn(10).nOut(numLabelClasses).build())
-		.pretrain(false).backprop(true).build();
-
-	final MultiLayerNetwork net = new MultiLayerNetwork(conf);
-	net.init();
-
-	net.setListeners(new ScoreIterationListener(20)); // Print the score (loss function value) every 20 iterations
-
-	// ----- Train the network, evaluating the test set performance at each epoch
-	// -----
-	final int nEpochs = 40;
-	final String str = "Test set evaluation at epoch %d: Accuracy = %.2f, F1 = %.2f";
-	for (int i = 0; i < nEpochs; i++) {
-	    net.fit(trainData);
-
-	    // Evaluate on the test set:
-	    final Evaluation evaluation = net.evaluate(testData);
-	    UCISequenceClassificationExample.log.info(String.format(str, i, evaluation.accuracy(), evaluation.f1()));
-
-	    testData.reset();
-	    trainData.reset();
-	}
-
-	UCISequenceClassificationExample.log.info("----- Example Complete -----");
-    }
 }
